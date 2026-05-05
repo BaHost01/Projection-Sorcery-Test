@@ -1,6 +1,8 @@
 -- ============================================================
--- FPS Display + Arte de Projeção (Trilha Temporal Otimizada)
+-- PROJECTION SORCERY: COMPLETE REWORK
 -- ============================================================
+
+-- [ SERVICES ]
 local RunService   = game:GetService("RunService")
 local Players      = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -9,106 +11,179 @@ local Debris       = game:GetService("Debris")
 
 local localPlayer = Players.LocalPlayer
 
--- ============================================================
--- PREVINE DUPLICAÇÃO DE UI
--- ============================================================
-if CoreGui:FindFirstChild("FPSSystem") then CoreGui.FPSSystem:Destroy() end
+-- [ CONFIGURATION ]
+local CONFIG = {
+    RNG_CHANCE          = 0.40, -- 40% chance to activate
+    PREDICTION_FRAMES   = 24,   -- Number of clones
+    MIRROR_LIFESPAN     = 0.8,  -- Lifespan of clones
+    SUCCESS_HITS_NEEDED = 6,    -- Hits for success
+    WAVE_INTERVAL       = 3.0,  -- Interval between waves
+    
+    COLORS = {
+        GREEN     = Color3.fromRGB(80, 255, 120),
+        YELLOW    = Color3.fromRGB(255, 210, 50),
+        RED       = Color3.fromRGB(255, 70, 70),
+        PURPLE    = Color3.fromRGB(180, 100, 255),
+        CYAN      = Color3.fromRGB(0, 220, 255),
+        DARK_BLUE = Color3.fromRGB(0, 0, 139),
+    }
+}
 
--- ============================================================
--- CONFIGURAÇÕES DA ARTE DE PROJEÇÃO
--- ============================================================
-local RNG_CHANCE          = 0.40 -- 40% de chance de ativar a habilidade
-local PREDICTION_FRAMES   = 24   -- Número de clones na trilha temporal
-local MIRROR_LIFESPAN     = 0.8  -- Segundos até os clones estilhaçarem
-local SUCCESS_HITS_NEEDED = 6    -- Toques necessários para confirmar a previsão
-local WAVE_INTERVAL       = 3.0  -- Intervalo (segundos) entre cada onda de previsão
+-- [ UI SETUP ]
+if CoreGui:FindFirstChild("ProjectionSorceryUI") then 
+    CoreGui.ProjectionSorceryUI:Destroy() 
+end
 
--- ============================================================
--- CORES E PALETA
--- ============================================================
-local C_GREEN     = Color3.fromRGB(80, 255, 120)
-local C_YELLOW    = Color3.fromRGB(255, 210, 50)
-local C_RED       = Color3.fromRGB(255, 70, 70)
-local C_PURPLE    = Color3.fromRGB(180, 100, 255)
-local C_CYAN      = Color3.fromRGB(0, 220, 255)
-local C_DARK_BLUE = Color3.fromRGB(0, 0, 139) -- Cor dos clones (Azul Escuro)
-
--- ============================================================
--- UI COMPLETA (HUD)
--- ============================================================
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "FPSSystem"
+screenGui.Name = "ProjectionSorceryUI"
 screenGui.ResetOnSpawn = false
 screenGui.IgnoreGuiInset = true 
-screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = CoreGui
 
--- Painel de FPS
-local fpsFrame = Instance.new("Frame")
-fpsFrame.Size = UDim2.new(0, 120, 0, 40)
-fpsFrame.Position = UDim2.new(0, 20, 0, 20)
-fpsFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
-fpsFrame.BackgroundTransparency = 0.3
-fpsFrame.BorderSizePixel = 0
-fpsFrame.Parent = screenGui
-Instance.new("UICorner", fpsFrame).CornerRadius = UDim.new(0, 8)
+local function createBeautifulLabel(name, position, size, color)
+    local label = Instance.new("TextLabel")
+    label.Name = name
+    label.Position = position
+    label.Size = size
+    label.BackgroundTransparency = 1 -- Invisible Background
+    label.TextColor3 = color
+    label.TextScaled = true
+    label.Font = Enum.Font.GothamBold
+    label.TextStrokeTransparency = 0.5
+    label.TextStrokeColor3 = Color3.new(0, 0, 0)
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.RichText = true -- Enable beautiful text options
+    label.Parent = screenGui
+    return label
+end
 
-local fpsLabel = Instance.new("TextLabel")
-fpsLabel.Size = UDim2.new(1, 0, 1, 0)
-fpsLabel.BackgroundTransparency = 1
-fpsLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-fpsLabel.TextScaled = true
-fpsLabel.Font = Enum.Font.GothamBold
-fpsLabel.Text = "FPS: --"
-fpsLabel.Parent = fpsFrame
+local fpsLabel = createBeautifulLabel("FPSLabel", UDim2.new(0, 20, 0, 20), UDim2.new(0, 120, 0, 30), Color3.new(1, 1, 1))
+local pingLabel = createBeautifulLabel("PingLabel", UDim2.new(0, 20, 0, 50), UDim2.new(0, 120, 0, 30), Color3.new(1, 1, 1))
+local modeLabel = createBeautifulLabel("ModeLabel", UDim2.new(0, 20, 0, 85), UDim2.new(0, 300, 0, 30), CONFIG.COLORS.PURPLE)
+local infoLabel = createBeautifulLabel("InfoLabel", UDim2.new(0, 20, 0, 115), UDim2.new(0, 400, 0, 25), CONFIG.COLORS.CYAN)
 
--- Etiqueta de Status
-local modeLabel = Instance.new("TextLabel")
-modeLabel.Size = UDim2.new(0, 300, 0, 30)
-modeLabel.Position = UDim2.new(0, 20, 0, 65)
-modeLabel.BackgroundTransparency = 1
-modeLabel.TextColor3 = C_PURPLE
-modeLabel.TextScaled = true
-modeLabel.Font = Enum.Font.GothamBold
 modeLabel.Text = "A aguardar..."
-modeLabel.TextXAlignment = Enum.TextXAlignment.Left
-modeLabel.TextStrokeTransparency = 0.5
-modeLabel.Parent = screenGui
-
--- Etiqueta de Confirmação de Sucesso
-local infoLabel = Instance.new("TextLabel")
-infoLabel.Size = UDim2.new(0, 300, 0, 20)
-infoLabel.Position = UDim2.new(0, 20, 0, 95)
-infoLabel.BackgroundTransparency = 1
-infoLabel.TextColor3 = C_CYAN
-infoLabel.TextScaled = true
-infoLabel.Font = Enum.Font.Gotham
 infoLabel.Text = ""
-infoLabel.TextXAlignment = Enum.TextXAlignment.Left
-infoLabel.TextStrokeTransparency = 0.5
-infoLabel.Parent = screenGui
 
--- ============================================================
--- ESTADO DO SISTEMA
--- ============================================================
-local projecaoActive = false
-local rngDone        = false
+-- [ STATE ]
+local state = {
+    projecaoActive = false,
+    rngDone        = false,
+    waveTimer      = 0,
+    fpsBuffer      = table.create(30, 0),
+    fpsIdx         = 0,
+    fpsSum         = 0,
+    fpsUpdateTimer = 0,
+    playerHistory  = {}, -- Store history for enhanced prediction
+    activeWaves    = {}  -- Store active waves for spatial hit detection
+}
 
--- Buffer para o cálculo da média de FPS
-local SAMPLE_COUNT = 30
-local fpsBuf = table.create(SAMPLE_COUNT, 0)
-local bufIdx, bufSum, fpsTimer = 0, 0, 0
+-- [ UTILITIES ]
 
--- ============================================================
--- OTIMIZAÇÃO: CRIAR MOLDE LEVE DO PERSONAGEM
--- Limpa roupas e scripts antes de clonar 24 vezes, salvando memória.
--- ============================================================
+local function updatePlayerHistory(dt)
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == localPlayer then continue end
+        local char = player.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            if not state.playerHistory[player.UserId] then
+                state.playerHistory[player.UserId] = {
+                    lastPos = hrp.Position,
+                    velocityHistory = {}
+                }
+            end
+            local hist = state.playerHistory[player.UserId]
+            local currentVel = (hrp.Position - hist.lastPos) / dt
+            table.insert(hist.velocityHistory, 1, currentVel)
+            if #hist.velocityHistory > 10 then table.remove(hist.velocityHistory) end
+            hist.lastPos = hrp.Position
+        end
+    end
+end
+
+local function getSmoothedVelocity(userId)
+    local hist = state.playerHistory[userId]
+    if not hist or #hist.velocityHistory == 0 then return Vector3.zero end
+    local sum = Vector3.zero
+    for _, v in ipairs(hist.velocityHistory) do
+        sum += v
+    end
+    return sum / #hist.velocityHistory
+end
+
+-- Object Pool State
+local pool = {
+    available = {},
+    active = {},
+    MAX_SIZE = CONFIG.PREDICTION_FRAMES * 5
+}
+
+local function getFromPool()
+    local clone = table.remove(pool.available)
+    if clone then
+        table.insert(pool.active, clone)
+        clone.Parent = workspace
+    end
+    return clone
+end
+
+local function releaseToPool(clone)
+    for i, v in ipairs(pool.active) do
+        if v == clone then
+            table.remove(pool.active, i)
+            break
+        end
+    end
+    clone.Parent = nil
+    table.insert(pool.available, clone)
+end
+
+-- Improved shatterAndRelease for pooling
+local function shatterAndRelease(cloneModel)
+    if not cloneModel then return end
+    
+    local tweenDuration = 0.5
+    local tweenInfo = TweenInfo.new(tweenDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local partsToReset = {}
+
+    for _, part in ipairs(cloneModel:GetDescendants()) do
+        if part:IsA("BasePart") then
+            if part.Name == "HumanoidRootPart" then continue end
+            
+            table.insert(partsToReset, {
+                part = part,
+                originalSize = part.Size,
+                originalTransparency = part.Transparency,
+                originalColor = part.Color
+            })
+
+            local explodeOffset = Vector3.new(math.random(-10, 10), math.random(5, 20), math.random(-10, 10))
+            local targetCFrame = part.CFrame + explodeOffset
+
+            TweenService:Create(part, tweenInfo, {
+                CFrame = targetCFrame,
+                Size = Vector3.new(0.1, 0.1, 0.1),
+                Transparency = 1
+            }):Play()
+        end
+    end
+
+    task.delay(tweenDuration, function()
+        for _, data in ipairs(partsToReset) do
+            data.part.Size = data.originalSize
+            data.part.Transparency = data.originalTransparency
+            data.part.Color = data.originalColor
+        end
+        releaseToPool(cloneModel)
+    end)
+end
+
+-- Lightweight template creator
 local function createLightweightTemplate(character)
     character.Archivable = true
     local template = character:Clone()
     character.Archivable = false
 
-    -- Limpeza rigorosa para performance
     for _, child in ipairs(template:GetDescendants()) do
         if child:IsA("Accessory") or child:IsA("Clothing") or child:IsA("ShirtGraphic") or child:IsA("Decal") or child:IsA("Script") or child:IsA("LocalScript") or child:IsA("Sound") or child:IsA("ParticleEmitter") then
             child:Destroy()
@@ -117,8 +192,8 @@ local function createLightweightTemplate(character)
             child.CanCollide = false
             child.CastShadow = false
             child.Material = Enum.Material.Neon
-            child.Color = C_DARK_BLUE
-            child.Transparency = 0.7
+            child.Color = CONFIG.COLORS.CYAN -- Changed to CYAN for visibility
+            child.Transparency = 0.4 -- Reduced transparency
         end
     end
 
@@ -130,38 +205,19 @@ local function createLightweightTemplate(character)
     return template
 end
 
--- ============================================================
--- EFEITO: ESTILHAÇAR VISUALMENTE (Sem uso de Física para evitar lag)
--- ============================================================
-local function shatterClone(cloneModel)
-    if not cloneModel then return end
-    
-    local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-
-    for _, part in ipairs(cloneModel:GetDescendants()) do
-        if part:IsA("BasePart") then
-            if part.Name == "HumanoidRootPart" then
-                part:Destroy() -- Removemos a root para não atrapalhar visualmente
-                continue
-            end
-            
-            -- Em vez de física, usamos Tween para afastar e diminuir as peças (MUITO mais leve)
-            local explodeOffset = Vector3.new(math.random(-10, 10), math.random(5, 20), math.random(-10, 10))
-            local targetCFrame = part.CFrame + explodeOffset
-
-            TweenService:Create(part, tweenInfo, {
-                CFrame = targetCFrame,
-                Size = Vector3.new(0.1, 0.1, 0.1),
-                Transparency = 1
-            }):Play()
-        end
+-- Initialize pool
+local function initializePool(templateChar)
+    local template = createLightweightTemplate(templateChar)
+    for i = 1, pool.MAX_SIZE do
+        local clone = template:Clone()
+        clone.Name = "PooledClone"
+        clone.Parent = nil
+        table.insert(pool.available, clone)
     end
-    Debris:AddItem(cloneModel, 0.3) -- Remove totalmente da memória a seguir
+    template:Destroy()
 end
 
--- ============================================================
--- POSES MANUAIS (Animação de Caminhada Estática)
--- ============================================================
+-- Pose application
 local function applyFakePose(clone, isJumping, frameIndex)
     local rShoulder = clone:FindFirstChild("Right Shoulder", true) or clone:FindFirstChild("RightShoulder", true)
     local lShoulder = clone:FindFirstChild("Left Shoulder", true) or clone:FindFirstChild("LeftShoulder", true)
@@ -169,12 +225,10 @@ local function applyFakePose(clone, isJumping, frameIndex)
     local lHip = clone:FindFirstChild("Left Hip", true) or clone:FindFirstChild("LeftHip", true)
 
     if isJumping then
-        -- Mãos ao alto ao pular
         if rShoulder then rShoulder.C0 = rShoulder.C0 * CFrame.Angles(math.rad(120), 0, 0) end
         if lShoulder then lShoulder.C0 = lShoulder.C0 * CFrame.Angles(math.rad(120), 0, 0) end
     else
-        -- Ciclo senoidal simulando pernas e braços a andar
-        local walkCycle = math.sin((frameIndex / PREDICTION_FRAMES) * math.pi * 6) * 0.6
+        local walkCycle = math.sin((frameIndex / CONFIG.PREDICTION_FRAMES) * math.pi * 6) * 0.6
         if rHip then rHip.C0 = rHip.C0 * CFrame.Angles(walkCycle, 0, 0) end
         if lHip then lHip.C0 = lHip.C0 * CFrame.Angles(-walkCycle, 0, 0) end
         if rShoulder then rShoulder.C0 = rShoulder.C0 * CFrame.Angles(-walkCycle * 0.5, 0, 0) end
@@ -182,9 +236,8 @@ local function applyFakePose(clone, isJumping, frameIndex)
     end
 end
 
--- ============================================================
--- GERAR A TRILHA TEMPORAL (ONDA DE PROJEÇÃO)
--- ============================================================
+-- [ PREDICTION LOGIC ]
+
 local function triggerProjectionWave()
     for _, targetPlayer in ipairs(Players:GetPlayers()) do
         if targetPlayer == localPlayer then continue end
@@ -196,81 +249,51 @@ local function triggerProjectionWave()
         if not hrp or not hum or hum.Health <= 0 then continue end
 
         local startPos = hrp.Position
-        local actualVel = hrp.AssemblyLinearVelocity
+        local smoothedVel = getSmoothedVelocity(targetPlayer.UserId)
         local isJumping = hum.FloorMaterial == Enum.Material.Air
         
         -- PREVISÃO COM JOGADOR PARADO: Se a velocidade for muito baixa, forçamos um vetor para a frente
-        local predVel = actualVel
-        if actualVel.Magnitude < 1 then
+        local predVel = smoothedVel
+        if smoothedVel.Magnitude < 1 then
             local walkSpeed = (hum.WalkSpeed > 0) and hum.WalkSpeed or 16
             predVel = hrp.CFrame.LookVector * walkSpeed
         end
 
-        local groupFolder = Instance.new("Folder")
-        groupFolder.Name = "Previsao_" .. targetPlayer.Name
-        groupFolder.Parent = workspace
-
-        local hitCount = 0
-        local touchedIndexes = {}
-        local isSuccessTriggered = false
-
-        -- Cria o molde base (Ultra Leve)
-        local template = createLightweightTemplate(sourceChar)
-
-        for i = 1, PREDICTION_FRAMES do
-            local t = (i / PREDICTION_FRAMES) * MIRROR_LIFESPAN
+        local activeClones = {}
+        for i = 1, CONFIG.PREDICTION_FRAMES do
+            local t = (i / CONFIG.PREDICTION_FRAMES) * CONFIG.MIRROR_LIFESPAN
             local gravity = isJumping and Vector3.new(0, -workspace.Gravity, 0) or Vector3.zero
             local predictedPos = startPos + (predVel * t) + (0.5 * gravity * (t * t))
             
-            -- Clonamos a partir do molde leve (Muito mais rápido!)
-            local clone = template:Clone()
+            local clone = getFromPool()
+            if not clone then continue end
+            
             local cloneHrp = clone:FindFirstChild("HumanoidRootPart")
-            if not cloneHrp then clone:Destroy(); continue end
+            if not cloneHrp then releaseToPool(clone); continue end
 
+            table.insert(activeClones, clone)
             cloneHrp.CFrame = CFrame.new(predictedPos, predictedPos + predVel.Unit)
             applyFakePose(clone, isJumping, i)
             
-            -- OTIMIZAÇÃO: Usar a própria HumanoidRootPart como Hitbox expandida
-            cloneHrp.Size = cloneHrp.Size + Vector3.new(2, 4, 2) -- Hitbox generosa
-            cloneHrp.Transparency = 1 -- Mantém a HRP invisível
-            
-            cloneHrp.Touched:Connect(function(hit)
-                if isSuccessTriggered then return end
-                
-                local hitPlayer = Players:GetPlayerFromCharacter(hit.Parent)
-                if hitPlayer == targetPlayer and not touchedIndexes[i] then
-                    touchedIndexes[i] = true
-                    hitCount += 1
-                    
-                    -- Feedback visual ao pisar na previsão (muda para Roxo)
-                    for _, p in ipairs(clone:GetChildren()) do
-                        if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
-                            p.Color = C_PURPLE
-                        end
-                    end
-                    
-                    if hitCount >= SUCCESS_HITS_NEEDED then
-                        isSuccessTriggered = true
-                        infoLabel.Text = "★ PREVISÃO DE SUCESSO: " .. targetPlayer.Name .. " ★"
-                        infoLabel.TextColor3 = C_GREEN
-                        
-                        -- Ação de acerto (Pode adicionar o dano aqui)
-                        -- Ex: hum:TakeDamage(30)
-                    end
-                end
-            end)
-
-            clone.Parent = groupFolder
+            -- HITBOX SETUP (for spatial query)
+            cloneHrp.Size = Vector3.new(4, 6, 4) -- Large hitbox
+            cloneHrp.Transparency = 1 
         end
-        
-        template:Destroy() -- O molde já não é necessário
 
-        -- Estilhaça toda a trilha após 0.8 segundos exatos
-        task.delay(MIRROR_LIFESPAN, function()
-            for _, child in ipairs(groupFolder:GetChildren()) do
-                if child:IsA("Model") then shatterClone(child) end
+        local waveData = {
+            targetPlayer = targetPlayer,
+            clones = activeClones,
+            hitCount = 0,
+            touchedIndexes = {},
+            isSuccessTriggered = false,
+            expireTime = os.clock() + CONFIG.MIRROR_LIFESPAN
+        }
+        table.insert(state.activeWaves, waveData)
+        
+        task.delay(CONFIG.MIRROR_LIFESPAN, function()
+            for _, clone in ipairs(activeClones) do
+                shatterAndRelease(clone)
             end
-            Debris:AddItem(groupFolder, 0.5)
             
             if infoLabel.Text ~= "" then
                 task.delay(1.5, function() infoLabel.Text = "" end)
@@ -279,54 +302,85 @@ local function triggerProjectionWave()
     end
 end
 
--- ============================================================
--- ATIVAÇÃO INICIAL E SORTEIO (RNG)
--- ============================================================
-task.delay(2, function()
-    if not rngDone then
-        rngDone = true
-        modeLabel.Text = "A sortear habilidade..."
-        modeLabel.TextColor3 = C_YELLOW
-        
-        task.delay(1.5, function()
-            local success = math.random() < RNG_CHANCE
-            if success then
-                projecaoActive = true
-                modeLabel.Text = "◈ Arte de Projeção ATIVA"
-                modeLabel.TextColor3 = C_PURPLE
-            else 
-                modeLabel.Text = "✗ Falha na Arte de Projeção"
-                modeLabel.TextColor3 = C_RED
-            end
-        end)
-    end
+-- [ INITIALIZATION ]
+
+task.spawn(function()
+    local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+    initializePool(char)
 end)
 
--- ============================================================
--- LOOP PRINCIPAL (Conta FPS + Ativação das Ondas)
--- ============================================================
-local waveTimer = 0
+
+    -- [ MAIN LOOP ]
 
 RunService.RenderStepped:Connect(function(dt)
-    -- LÓGICA DO CONTADOR DE FPS
-    bufIdx = bufIdx % SAMPLE_COUNT + 1
-    bufSum = bufSum - fpsBuf[bufIdx] + (1 / dt)
-    fpsBuf[bufIdx] = 1 / dt
+    updatePlayerHistory(dt) -- Update player movement history
     
-    fpsTimer += dt
-    if fpsTimer >= 0.5 then
-        fpsTimer = 0
-        local avgFps = math.floor(bufSum / SAMPLE_COUNT)
-        fpsLabel.TextColor3 = avgFps >= 55 and C_GREEN or avgFps >= 30 and C_YELLOW or C_RED
-        fpsLabel.Text = "FPS: " .. avgFps
+    -- Spatial Hit Detection for Active Waves
+    for i = #state.activeWaves, 1, -1 do
+        local wave = state.activeWaves[i]
+        if os.clock() > wave.expireTime then
+            table.remove(state.activeWaves, i)
+            continue
+        end
+        
+        if wave.isSuccessTriggered then continue end
+
+        local targetChar = wave.targetPlayer.Character
+        local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+        if not targetHrp then continue end
+
+        for idx, clone in ipairs(wave.clones) do
+            if wave.touchedIndexes[idx] then continue end
+            
+            local cloneHrp = clone:FindFirstChild("HumanoidRootPart")
+            if not cloneHrp then continue end
+
+            -- Efficient spatial check: Is target within clone's expanded hitbox?
+            local diff = (targetHrp.Position - cloneHrp.Position)
+            if math.abs(diff.X) < cloneHrp.Size.X/2 and math.abs(diff.Y) < cloneHrp.Size.Y/2 and math.abs(diff.Z) < cloneHrp.Size.Z/2 then
+                wave.touchedIndexes[idx] = true
+                wave.hitCount += 1
+                
+                -- Feedback visual
+                for _, p in ipairs(clone:GetChildren()) do
+                    if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+                        p.Color = CONFIG.COLORS.PURPLE
+                    end
+                end
+                
+                if wave.hitCount >= CONFIG.SUCCESS_HITS_NEEDED then
+                    wave.isSuccessTriggered = true
+                    infoLabel.Text = "★ PREVISÃO DE SUCESSO: " .. wave.targetPlayer.Name .. " ★"
+                    infoLabel.TextColor3 = CONFIG.COLORS.GREEN
+                end
+            end
+        end
     end
 
-    -- LÓGICA DO TEMPORIZADOR DA ARTE DE PROJEÇÃO
-    if projecaoActive then
-        waveTimer += dt
-        if waveTimer >= WAVE_INTERVAL then 
-            waveTimer = 0
-            triggerProjectionWave() -- Lança os 24 clones simulados
+    -- FPS Counter Logic
+    state.fpsIdx = state.fpsIdx % 30 + 1
+    state.fpsSum = state.fpsSum - state.fpsBuffer[state.fpsIdx] + (1 / dt)
+    state.fpsBuffer[state.fpsIdx] = 1 / dt
+    
+    state.fpsUpdateTimer += dt
+    if state.fpsUpdateTimer >= 0.5 then
+        state.fpsUpdateTimer = 0
+        local avgFps = math.floor(state.fpsSum / 30)
+        fpsLabel.TextColor3 = avgFps >= 55 and CONFIG.COLORS.GREEN or avgFps >= 30 and CONFIG.COLORS.YELLOW or CONFIG.COLORS.RED
+        fpsLabel.Text = "FPS: " .. avgFps
+        
+        -- Ping Counter Logic (Updated every 0.5s with FPS)
+        local ping = math.floor(localPlayer:GetNetworkPing() * 1000)
+        pingLabel.Text = "Ping: " .. ping .. "ms"
+        pingLabel.TextColor3 = ping < 100 and CONFIG.COLORS.GREEN or ping < 200 and CONFIG.COLORS.YELLOW or CONFIG.COLORS.RED
+    end
+
+    -- Projection Wave Logic
+    if state.projecaoActive then
+        state.waveTimer += dt
+        if state.waveTimer >= CONFIG.WAVE_INTERVAL then 
+            state.waveTimer = 0
+            triggerProjectionWave()
         end
     end
 end)
