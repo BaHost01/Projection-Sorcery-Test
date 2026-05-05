@@ -19,6 +19,7 @@ local CONFIG = {
     SUCCESS_HITS_NEEDED = 6,    -- Hits for success
     WAVE_INTERVAL       = 3.0,  -- Interval between waves
     ABILITY_DURATION    = 5.0,  -- Max duration of the active ability
+    MEMORY_FILE         = "PredictionsMemory.txt",
     
     COLORS = {
         GREEN     = Color3.fromRGB(80, 255, 120),
@@ -76,11 +77,67 @@ local state = {
     fpsIdx           = 0,
     fpsSum           = 0,
     fpsUpdateTimer   = 0,
-    playerHistory    = {}, -- Store history for enhanced prediction
-    activeWaves      = {}  -- Store active waves for spatial hit detection
-}
+    playerHistory  = {}, -- Store history for enhanced prediction
+    activeWaves    = {}, -- Store active waves for spatial hit detection
+    memoryLoaded   = false
+    }
 
--- [ UTILITIES ]
+    -- [ PERSISTENCE & UTILITIES ]
+
+    local HttpService = game:GetService("HttpService")
+
+    local function saveMemory()
+    local data = {}
+    for userId, hist in pairs(state.playerHistory) do
+        -- Only save players we've actually tracked significantly
+        if #hist.velocityHistory > 5 then
+            data[tostring(userId)] = {
+                lastPos = {hist.lastPos.X, hist.lastPos.Y, hist.lastPos.Z}
+            }
+        end
+    end
+
+    local success, encoded = pcall(function() return HttpService:JSONEncode(data) end)
+    if success and writefile then
+        writefile(CONFIG.MEMORY_FILE, encoded)
+    end
+    end
+
+    local function loadMemory()
+    if readfile and isfile and isfile(CONFIG.MEMORY_FILE) then
+        local content = readfile(CONFIG.MEMORY_FILE)
+        local success, decoded = pcall(function() return HttpService:JSONDecode(content) end)
+        if success then
+            for userIdStr, data in pairs(decoded) do
+                local userId = tonumber(userIdStr)
+                state.playerHistory[userId] = {
+                    lastPos = Vector3.new(data.lastPos[1], data.lastPos[2], data.lastPos[3]),
+                    velocityHistory = {}
+                }
+            end
+            state.memoryLoaded = true
+        end
+    end
+    end
+
+    local function notify(title, text, color)
+    task.spawn(function()
+        local originalText = infoLabel.Text
+        local originalColor = infoLabel.TextColor3
+
+        infoLabel.Text = "<b>[" .. title:upper() .. "]</b> " .. text
+        infoLabel.TextColor3 = color or CONFIG.COLORS.CYAN
+
+        task.wait(3)
+        if infoLabel.Text == "<b>[" .. title:upper() .. "]</b> " .. text then
+            infoLabel.Text = originalText
+            infoLabel.TextColor3 = originalColor
+        end
+    end)
+    end
+
+    -- [ UTILITIES ]
+
 
 local function updatePlayerHistory(dt)
     for _, player in ipairs(Players:GetPlayers()) do
@@ -146,19 +203,11 @@ local function shatterAndRelease(cloneModel)
     
     local tweenDuration = 0.5
     local tweenInfo = TweenInfo.new(tweenDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    local partsToReset = {}
 
     for _, part in ipairs(cloneModel:GetDescendants()) do
         if part:IsA("BasePart") then
             if part.Name == "HumanoidRootPart" then continue end
             
-            table.insert(partsToReset, {
-                part = part,
-                originalSize = part.Size,
-                originalTransparency = part.Transparency,
-                originalColor = part.Color
-            })
-
             local explodeOffset = Vector3.new(math.random(-10, 10), math.random(5, 20), math.random(-10, 10))
             local targetCFrame = part.CFrame + explodeOffset
 
@@ -170,21 +219,19 @@ local function shatterAndRelease(cloneModel)
         end
     end
 
-    task.delay(tweenDuration, function()
-        for _, data in ipairs(partsToReset) do
-            data.part.Size = data.originalSize
-            data.part.Transparency = data.originalTransparency
-            data.part.Color = data.originalColor
-        end
+    task.delay(tweenDuration + 0.05, function()
         releaseToPool(cloneModel)
     end)
 end
 
 -- Lightweight template creator
 local function createLightweightTemplate(character)
+    if not character then return nil end
     character.Archivable = true
-    local template = character:Clone()
+    local success, template = pcall(function() return character:Clone() end)
     character.Archivable = false
+    
+    if not success or not template then return nil end
 
     for _, child in ipairs(template:GetDescendants()) do
         if child:IsA("Accessory") or child:IsA("Clothing") or child:IsA("ShirtGraphic") or child:IsA("Decal") or child:IsA("Script") or child:IsA("LocalScript") or child:IsA("Sound") or child:IsA("ParticleEmitter") then
@@ -194,8 +241,8 @@ local function createLightweightTemplate(character)
             child.CanCollide = false
             child.CastShadow = false
             child.Material = Enum.Material.Neon
-            child.Color = CONFIG.COLORS.CYAN -- Changed to CYAN for visibility
-            child.Transparency = 0.4 -- Reduced transparency
+            child.Color = CONFIG.COLORS.CYAN
+            child.Transparency = 0.4
         end
     end
 
@@ -210,6 +257,8 @@ end
 -- Initialize pool
 local function initializePool(templateChar)
     local template = createLightweightTemplate(templateChar)
+    if not template then return end
+    
     for i = 1, pool.MAX_SIZE do
         local clone = template:Clone()
         clone.Name = "PooledClone"
@@ -217,6 +266,23 @@ local function initializePool(templateChar)
         table.insert(pool.available, clone)
     end
     template:Destroy()
+end
+
+-- Reset clone state before reuse
+local function resetClone(clone)
+    for _, part in ipairs(clone:GetDescendants()) do
+        if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+            part.Size = Vector3.new(1, 2, 1) -- Approximated standard part size, will be refined if needed
+            part.Transparency = 0.4
+            part.Color = CONFIG.COLORS.CYAN
+        end
+    end
+    -- Specifically reset HRP
+    local hrp = clone:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        hrp.Size = Vector3.new(2, 2, 1)
+        hrp.Transparency = 1
+    end
 end
 
 -- Pose application
@@ -270,11 +336,16 @@ local function triggerProjectionWave()
             local clone = getFromPool()
             if not clone then continue end
             
+            resetClone(clone) -- Ensure clone is in a clean state
+            
             local cloneHrp = clone:FindFirstChild("HumanoidRootPart")
             if not cloneHrp then releaseToPool(clone); continue end
 
             table.insert(activeClones, clone)
-            cloneHrp.CFrame = CFrame.new(predictedPos, predictedPos + predVel.Unit)
+            
+            -- SAFETY: Avoid NaN by ensuring predVel is not zero
+            local targetLook = predVel.Magnitude > 0.01 and predVel.Unit or hrp.CFrame.LookVector
+            cloneHrp.CFrame = CFrame.new(predictedPos, predictedPos + targetLook)
             applyFakePose(clone, isJumping, i)
             
             -- HITBOX SETUP (for spatial query)
@@ -307,8 +378,19 @@ end
 -- [ INITIALIZATION ]
 
 task.spawn(function()
+    loadMemory()
+    notify("System", "Memory loaded successfully", CONFIG.COLORS.GREEN)
+    
     local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
     initializePool(char)
+end)
+
+-- Save memory every 60 seconds
+task.spawn(function()
+    while true do
+        task.wait(60)
+        saveMemory()
+    end
 end)
 
 -- RNG Activation Logic (Restored and Upgraded)
@@ -326,6 +408,8 @@ task.delay(1, function()
             state.abilityStartTime = os.clock()
             modeLabel.Text = "<b>◈ ARTE DE PROJEÇÃO: ATIVA</b>"
             modeLabel.TextColor3 = CONFIG.COLORS.PURPLE
+            
+            notify("Ability", "Projection Sorcery Activated!", CONFIG.COLORS.PURPLE)
             
             -- Cool "Rainbow" effect for Active status
             task.spawn(function()
@@ -414,20 +498,7 @@ RunService.RenderStepped:Connect(function(dt)
                 end
             end
         end
-        
-        -- Check if every prediction failed (all clones expired or checked without success)
-        local allChecked = true
-        for idx = 1, CONFIG.PREDICTION_FRAMES do
-            if not wave.touchedIndexes[idx] then
-                allChecked = false
-                break
-            end
-        end
-        
-        -- In this logic, touchedIndexes tracks successful touches. 
-        -- If the wave expires (handled by table.remove above), it's a failure.
-        -- If we want to end early when "every prediction failed", we need to define "failed".
-        -- Let's stick to: End if 5s pass OR if success is reached.
+    end
 
     -- FPS Counter Logic
     state.fpsIdx = state.fpsIdx % 30 + 1

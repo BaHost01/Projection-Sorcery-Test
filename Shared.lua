@@ -21,9 +21,12 @@ local CONFIG = {
 -- [ PRIVATE UTILITIES ]
 
 local function createLightweightTemplate(character)
+    if not character then return nil end
     character.Archivable = true
-    local template = character:Clone()
+    local success, template = pcall(function() return character:Clone() end)
     character.Archivable = false
+
+    if not success or not template then return nil end
 
     for _, child in ipairs(template:GetDescendants()) do
         if child:IsA("Accessory") or child:IsA("Clothing") or child:IsA("ShirtGraphic") or child:IsA("Decal") or child:IsA("Script") or child:IsA("LocalScript") or child:IsA("Sound") or child:IsA("ParticleEmitter") then
