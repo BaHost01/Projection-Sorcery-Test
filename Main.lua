@@ -180,21 +180,22 @@ local state = {
 
 local function updatePlayerHistory(dt)
     for _, player in ipairs(Players:GetPlayers()) do
-        if player == localPlayer then continue end
-        local char = player.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            if not state.playerHistory[player.UserId] then
-                state.playerHistory[player.UserId] = {
-                    lastPos = hrp.Position,
-                    velocityHistory = {}
-                }
+        if player ~= localPlayer then
+            local char = player.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                if not state.playerHistory[player.UserId] then
+                    state.playerHistory[player.UserId] = {
+                        lastPos = hrp.Position,
+                        velocityHistory = {}
+                    }
+                end
+                local hist = state.playerHistory[player.UserId]
+                local currentVel = (hrp.Position - hist.lastPos) / dt
+                table.insert(hist.velocityHistory, 1, currentVel)
+                if #hist.velocityHistory > 10 then table.remove(hist.velocityHistory) end
+                hist.lastPos = hrp.Position
             end
-            local hist = state.playerHistory[player.UserId]
-            local currentVel = (hrp.Position - hist.lastPos) / dt
-            table.insert(hist.velocityHistory, 1, currentVel)
-            if #hist.velocityHistory > 10 then table.remove(hist.velocityHistory) end
-            hist.lastPos = hrp.Position
         end
     end
 end
@@ -353,76 +354,77 @@ end
 local function triggerProjectionWave()
     logDebug("Triggering Projection Wave...")
     for _, targetPlayer in ipairs(Players:GetPlayers()) do
-        if targetPlayer == localPlayer then continue end
-
-        local sourceChar = targetPlayer.Character
-        local hrp = sourceChar and sourceChar:FindFirstChild("HumanoidRootPart")
-        local hum = sourceChar and sourceChar:FindFirstChild("Humanoid")
-        
-        if not hrp or not hum or hum.Health <= 0 then 
-            logDebug("Target invalid for player:", targetPlayer.Name)
-            continue 
-        end
-
-        logDebug("Generating path for:", targetPlayer.Name)
-        local startPos = hrp.Position
-        local smoothedVel = getSmoothedVelocity(targetPlayer.UserId)
-        local isJumping = hum.FloorMaterial == Enum.Material.Air
-        
-        -- PREVISÃO COM JOGADOR PARADO: Se a velocidade for muito baixa, forçamos um vetor para a frente
-        local predVel = smoothedVel
-        if smoothedVel.Magnitude < 1 then
-            local walkSpeed = (hum.WalkSpeed > 0) and hum.WalkSpeed or 16
-            predVel = hrp.CFrame.LookVector * walkSpeed
-        end
-
-        local activeClones = {}
-        for i = 1, CONFIG.PREDICTION_FRAMES do
-            local t = (i / CONFIG.PREDICTION_FRAMES) * CONFIG.MIRROR_LIFESPAN
-            local gravity = isJumping and Vector3.new(0, -workspace.Gravity, 0) or Vector3.zero
-            local predictedPos = startPos + (predVel * t) + (0.5 * gravity * (t * t))
+        if targetPlayer ~= localPlayer then
+            local sourceChar = targetPlayer.Character
+            local hrp = sourceChar and sourceChar:FindFirstChild("HumanoidRootPart")
+            local hum = sourceChar and sourceChar:FindFirstChild("Humanoid")
             
-            local clone = getFromPool()
-            if not clone then continue end
-            
-            resetClone(clone) -- Ensure clone is in a clean state
-            
-            local cloneHrp = clone:FindFirstChild("HumanoidRootPart")
-            if not cloneHrp then releaseToPool(clone); continue end
+            if hrp and hum and hum.Health > 0 then 
+                logDebug("Generating path for:", targetPlayer.Name)
+                local startPos = hrp.Position
+                local smoothedVel = getSmoothedVelocity(targetPlayer.UserId)
+                local isJumping = hum.FloorMaterial == Enum.Material.Air
+                
+                -- PREVISÃO COM JOGADOR PARADO: Se a velocidade for muito baixa, forçamos um vetor para a frente
+                local predVel = smoothedVel
+                if smoothedVel.Magnitude < 1 then
+                    local walkSpeed = (hum.WalkSpeed > 0) and hum.WalkSpeed or 16
+                    predVel = hrp.CFrame.LookVector * walkSpeed
+                end
 
-            table.insert(activeClones, clone)
-            
-            -- SAFETY: Avoid NaN by ensuring predVel is not zero
-            local targetLook = predVel.Magnitude > 0.01 and predVel.Unit or hrp.CFrame.LookVector
-            cloneHrp.CFrame = CFrame.new(predictedPos, predictedPos + targetLook)
-            applyFakePose(clone, isJumping, i)
-            
-            -- HITBOX SETUP (for spatial query)
-            cloneHrp.Size = Vector3.new(4, 6, 4) -- Large hitbox
-            cloneHrp.Transparency = 1 
-        end
+                local activeClones = {}
+                for i = 1, CONFIG.PREDICTION_FRAMES do
+                    local t = (i / CONFIG.PREDICTION_FRAMES) * CONFIG.MIRROR_LIFESPAN
+                    local gravity = isJumping and Vector3.new(0, -workspace.Gravity, 0) or Vector3.zero
+                    local predictedPos = startPos + (predVel * t) + (0.5 * gravity * (t * t))
+                    
+                    local clone = getFromPool()
+                    if clone then
+                        resetClone(clone) -- Ensure clone is in a clean state
+                        
+                        local cloneHrp = clone:FindFirstChild("HumanoidRootPart")
+                        if cloneHrp then
+                            table.insert(activeClones, clone)
+                            
+                            -- SAFETY: Avoid NaN by ensuring predVel is not zero
+                            local targetLook = predVel.Magnitude > 0.01 and predVel.Unit or hrp.CFrame.LookVector
+                            cloneHrp.CFrame = CFrame.new(predictedPos, predictedPos + targetLook)
+                            applyFakePose(clone, isJumping, i)
+                            
+                            -- HITBOX SETUP (for spatial query)
+                            cloneHrp.Size = Vector3.new(4, 6, 4) -- Large hitbox
+                            cloneHrp.Transparency = 1 
+                        else
+                            releaseToPool(clone)
+                        end
+                    end
+                end
 
-        logDebug("Wave clones deployed:", #activeClones)
-        local waveData = {
-            targetPlayer = targetPlayer,
-            clones = activeClones,
-            hitCount = 0,
-            touchedIndexes = {},
-            isSuccessTriggered = false,
-            expireTime = os.clock() + CONFIG.MIRROR_LIFESPAN
-        }
-        table.insert(state.activeWaves, waveData)
-        
-        task.delay(CONFIG.MIRROR_LIFESPAN, function()
-            logDebug("Wave expired for player:", targetPlayer.Name)
-            for _, clone in ipairs(activeClones) do
-                shatterAndRelease(clone)
+                logDebug("Wave clones deployed:", #activeClones)
+                local waveData = {
+                    targetPlayer = targetPlayer,
+                    clones = activeClones,
+                    hitCount = 0,
+                    touchedIndexes = {},
+                    isSuccessTriggered = false,
+                    expireTime = os.clock() + CONFIG.MIRROR_LIFESPAN
+                }
+                table.insert(state.activeWaves, waveData)
+                
+                task.delay(CONFIG.MIRROR_LIFESPAN, function()
+                    logDebug("Wave expired for player:", targetPlayer.Name)
+                    for _, clone in ipairs(activeClones) do
+                        shatterAndRelease(clone)
+                    end
+                    
+                    if infoLabel.Text ~= "" then
+                        task.delay(1.5, function() infoLabel.Text = "" end)
+                    end
+                end)
+            else
+                logDebug("Target invalid for player:", targetPlayer.Name)
             end
-            
-            if infoLabel.Text ~= "" then
-                task.delay(1.5, function() infoLabel.Text = "" end)
-            end
-        end)
+        end
     end
 end
 
@@ -501,7 +503,10 @@ task.delay(1, function()
                 if state.projecaoActive then
                     state.projecaoActive = false
                     modeLabel.Text = "<font color='#FF4646'>◈ ARTE DE PROJEÇÃO: EXPIRADA</font>"
-                    task.delay(2, function() modeLabel.Text = "A aguardar..." modeLabel.TextColor3 = CONFIG.COLORS.PURPLE end)
+                    task.delay(2, function() 
+                        modeLabel.Text = "A aguardar..." 
+                        modeLabel.TextColor3 = CONFIG.COLORS.PURPLE 
+                    end)
                 end
             end)
         else 
@@ -530,45 +535,48 @@ RunService.RenderStepped:Connect(function(dt)
         local wave = state.activeWaves[i]
         if os.clock() > wave.expireTime then
             table.remove(state.activeWaves, i)
-            continue
-        end
-        
-        if wave.isSuccessTriggered then continue end
-
-        local targetChar = wave.targetPlayer.Character
-        local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
-        if not targetHrp then continue end
-
-        for idx, clone in ipairs(wave.clones) do
-            if wave.touchedIndexes[idx] then continue end
-            
-            local cloneHrp = clone:FindFirstChild("HumanoidRootPart")
-            if not cloneHrp then continue end
-
-            -- Efficient spatial check: Is target within clone's expanded hitbox?
-            local diff = (targetHrp.Position - cloneHrp.Position)
-            if math.abs(diff.X) < cloneHrp.Size.X/2 and math.abs(diff.Y) < cloneHrp.Size.Y/2 and math.abs(diff.Z) < cloneHrp.Size.Z/2 then
-                logDebug("Spatial Hit Detected! Player:", wave.targetPlayer.Name, "Clone Index:", idx)
-                wave.touchedIndexes[idx] = true
-                wave.hitCount += 1
+        else
+            if not wave.isSuccessTriggered then
+                local targetChar = wave.targetPlayer.Character
+                local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
                 
-                -- Feedback visual
-                for _, p in ipairs(clone:GetChildren()) do
-                    if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
-                        p.Color = CONFIG.COLORS.PURPLE
-                    end
-                end
-                
-                if wave.hitCount >= CONFIG.SUCCESS_HITS_NEEDED then
-                    wave.isSuccessTriggered = true
-                    infoLabel.Text = "★ PREVISÃO DE SUCESSO: " .. wave.targetPlayer.Name .. " ★"
-                    infoLabel.TextColor3 = CONFIG.COLORS.GREEN
-                    
-                    -- Ability ends on success
-                    if state.projecaoActive then
-                        state.projecaoActive = false
-                        modeLabel.Text = "<font color='#50FF78'>◈ ARTE DE PROJEÇÃO: CONCLUÍDA</font>"
-                        task.delay(2, function() modeLabel.Text = "A aguardar..." modeLabel.TextColor3 = CONFIG.COLORS.PURPLE end)
+                if targetHrp then
+                    for idx, clone in ipairs(wave.clones) do
+                        if not wave.touchedIndexes[idx] then
+                            local cloneHrp = clone:FindFirstChild("HumanoidRootPart")
+                            if cloneHrp then
+                                -- Efficient spatial check: Is target within clone's expanded hitbox?
+                                local diff = (targetHrp.Position - cloneHrp.Position)
+                                if math.abs(diff.X) < cloneHrp.Size.X/2 and math.abs(diff.Y) < cloneHrp.Size.Y/2 and math.abs(diff.Z) < cloneHrp.Size.Z/2 then
+                                    logDebug("Spatial Hit Detected! Player:", wave.targetPlayer.Name, "Clone Index:", idx)
+                                    wave.touchedIndexes[idx] = true
+                                    wave.hitCount += 1
+                                    
+                                    -- Feedback visual
+                                    for _, p in ipairs(clone:GetChildren()) do
+                                        if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+                                            p.Color = CONFIG.COLORS.PURPLE
+                                        end
+                                    end
+                                    
+                                    if wave.hitCount >= CONFIG.SUCCESS_HITS_NEEDED then
+                                        wave.isSuccessTriggered = true
+                                        infoLabel.Text = "★ PREVISÃO DE SUCESSO: " .. wave.targetPlayer.Name .. " ★"
+                                        infoLabel.TextColor3 = CONFIG.COLORS.GREEN
+                                        
+                                        -- Ability ends on success
+                                        if state.projecaoActive then
+                                            state.projecaoActive = false
+                                            modeLabel.Text = "<font color='#50FF78'>◈ ARTE DE PROJEÇÃO: CONCLUÍDA</font>"
+                                            task.delay(2, function() 
+                                                modeLabel.Text = "A aguardar..." 
+                                                modeLabel.TextColor3 = CONFIG.COLORS.PURPLE 
+                                            end)
+                                        end
+                                    end
+                                end
+                            end
+                        end
                     end
                 end
             end
