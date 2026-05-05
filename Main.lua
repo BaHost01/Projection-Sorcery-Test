@@ -13,14 +13,15 @@ local localPlayer = Players.LocalPlayer
 
 -- [ CONFIGURATION ]
 local CONFIG = {
-    RNG_CHANCE          = 1, -- 40% chance to activate
-    PREDICTION_FRAMES   = 24,   -- Number of clones
-    MIRROR_LIFESPAN     = 0.8,  -- Lifespan of clones
-    SUCCESS_HITS_NEEDED = 6,    -- Hits for success
-    WAVE_INTERVAL       = 3.0,  -- Interval between waves
-    ABILITY_DURATION    = 5.0,  -- Max duration of the active ability
+    RNG_CHANCE          = 1.00, -- Set to 100% for verification
+    PREDICTION_FRAMES   = 24,   
+    MIRROR_LIFESPAN     = 0.8,  
+    SUCCESS_HITS_NEEDED = 6,    
+    WAVE_INTERVAL       = 3.0,  
+    ABILITY_DURATION    = 5.0,  
     MEMORY_FILE         = "PredictionsMemory.txt",
-    
+    DEBUG_MODE          = true, -- Enable detailed console logging
+
     COLORS = {
         GREEN     = Color3.fromRGB(80, 255, 120),
         YELLOW    = Color3.fromRGB(255, 210, 50),
@@ -32,15 +33,23 @@ local CONFIG = {
 }
 
 -- [ UI SETUP ]
-if CoreGui:FindFirstChild("ProjectionSorceryUI") then 
-    CoreGui.ProjectionSorceryUI:Destroy() 
+local function getSafeParent()
+    local success, _ = pcall(function() return CoreGui.Name end)
+    if success then return CoreGui end
+    return localPlayer:WaitForChild("PlayerGui")
+end
+
+local safeParent = getSafeParent()
+
+if safeParent:FindFirstChild("ProjectionSorceryUI") then 
+    safeParent.ProjectionSorceryUI:Destroy() 
 end
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "ProjectionSorceryUI"
 screenGui.ResetOnSpawn = false
 screenGui.IgnoreGuiInset = true 
-screenGui.Parent = CoreGui
+screenGui.Parent = safeParent
 
 local function createBeautifulLabel(name, position, size, color)
     local label = Instance.new("TextLabel")
@@ -86,38 +95,68 @@ local state = {
 
     local HttpService = game:GetService("HttpService")
 
-    local function saveMemory()
-    local data = {}
-    for userId, hist in pairs(state.playerHistory) do
-        -- Only save players we've actually tracked significantly
-        if #hist.velocityHistory > 5 then
-            data[tostring(userId)] = {
-                lastPos = {hist.lastPos.X, hist.lastPos.Y, hist.lastPos.Z}
-            }
+    local function logDebug(...)
+        if CONFIG.DEBUG_MODE then
+            print("[PROJECTION DEBUG]", ...)
         end
     end
 
-    local success, encoded = pcall(function() return HttpService:JSONEncode(data) end)
-    if success and writefile then
-        writefile(CONFIG.MEMORY_FILE, encoded)
-    end
+    local function saveMemory()
+        logDebug("Saving memory...")
+        local data = {}
+        for userId, hist in pairs(state.playerHistory) do
+            if #hist.velocityHistory > 5 then
+                data[tostring(userId)] = {
+                    lastPos = {hist.lastPos.X, hist.lastPos.Y, hist.lastPos.Z}
+                }
+            end
+        end
+
+        local success, encoded = pcall(function() return HttpService:JSONEncode(data) end)
+        if success and typeof(writefile) == "function" then
+            local writeSuccess, err = pcall(function() writefile(CONFIG.MEMORY_FILE, encoded) end)
+            if writeSuccess then
+                logDebug("Memory saved successfully.")
+            else
+                logDebug("Failed to write memory file:", err)
+            end
+        else
+            logDebug("JSON Encode failed or writefile unavailable.")
+        end
     end
 
     local function loadMemory()
-    if readfile and isfile and isfile(CONFIG.MEMORY_FILE) then
-        local content = readfile(CONFIG.MEMORY_FILE)
-        local success, decoded = pcall(function() return HttpService:JSONDecode(content) end)
-        if success then
-            for userIdStr, data in pairs(decoded) do
-                local userId = tonumber(userIdStr)
-                state.playerHistory[userId] = {
-                    lastPos = Vector3.new(data.lastPos[1], data.lastPos[2], data.lastPos[3]),
-                    velocityHistory = {}
-                }
+        logDebug("Loading memory...")
+        if typeof(readfile) == "function" and typeof(isfile) == "function" then
+            local exists = false
+            pcall(function() exists = isfile(CONFIG.MEMORY_FILE) end)
+
+            if exists then
+                local success, content = pcall(function() return readfile(CONFIG.MEMORY_FILE) end)
+                if success then
+                    local s, decoded = pcall(function() return HttpService:JSONDecode(content) end)
+                    if s then
+                        for userIdStr, data in pairs(decoded) do
+                            local userId = tonumber(userIdStr)
+                            state.playerHistory[userId] = {
+                                lastPos = Vector3.new(data.lastPos[1], data.lastPos[2], data.lastPos[3]),
+                                velocityHistory = {}
+                            }
+                        end
+                        state.memoryLoaded = true
+                        logDebug("Memory loaded successfully. Targets tracked:", #state.playerHistory)
+                    else
+                        logDebug("JSON Decode failed for memory file.")
+                    end
+                else
+                    logDebug("Failed to read memory file.")
+                end
+            else
+                logDebug("Memory file does not exist.")
             end
-            state.memoryLoaded = true
+        else
+            logDebug("readfile/isfile not supported by executor.")
         end
-    end
     end
 
     local function notify(title, text, color)
@@ -182,6 +221,9 @@ local function getFromPool()
     if clone then
         table.insert(pool.active, clone)
         clone.Parent = workspace
+        logDebug("Clone retrieved from pool. Remaining available:", #pool.available)
+    else
+        logDebug("Pool empty! No clones available.")
     end
     return clone
 end
@@ -195,11 +237,13 @@ local function releaseToPool(clone)
     end
     clone.Parent = nil
     table.insert(pool.available, clone)
+    logDebug("Clone released to pool. Current available:", #pool.available)
 end
 
 -- Improved shatterAndRelease for pooling
 local function shatterAndRelease(cloneModel)
     if not cloneModel then return end
+    logDebug("Shattering clone...")
     
     local tweenDuration = 0.5
     local tweenInfo = TweenInfo.new(tweenDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
@@ -307,6 +351,7 @@ end
 -- [ PREDICTION LOGIC ]
 
 local function triggerProjectionWave()
+    logDebug("Triggering Projection Wave...")
     for _, targetPlayer in ipairs(Players:GetPlayers()) do
         if targetPlayer == localPlayer then continue end
 
@@ -314,8 +359,12 @@ local function triggerProjectionWave()
         local hrp = sourceChar and sourceChar:FindFirstChild("HumanoidRootPart")
         local hum = sourceChar and sourceChar:FindFirstChild("Humanoid")
         
-        if not hrp or not hum or hum.Health <= 0 then continue end
+        if not hrp or not hum or hum.Health <= 0 then 
+            logDebug("Target invalid for player:", targetPlayer.Name)
+            continue 
+        end
 
+        logDebug("Generating path for:", targetPlayer.Name)
         local startPos = hrp.Position
         local smoothedVel = getSmoothedVelocity(targetPlayer.UserId)
         local isJumping = hum.FloorMaterial == Enum.Material.Air
@@ -353,6 +402,7 @@ local function triggerProjectionWave()
             cloneHrp.Transparency = 1 
         end
 
+        logDebug("Wave clones deployed:", #activeClones)
         local waveData = {
             targetPlayer = targetPlayer,
             clones = activeClones,
@@ -364,6 +414,7 @@ local function triggerProjectionWave()
         table.insert(state.activeWaves, waveData)
         
         task.delay(CONFIG.MIRROR_LIFESPAN, function()
+            logDebug("Wave expired for player:", targetPlayer.Name)
             for _, clone in ipairs(activeClones) do
                 shatterAndRelease(clone)
             end
@@ -378,11 +429,29 @@ end
 -- [ INITIALIZATION ]
 
 task.spawn(function()
-    loadMemory()
+    logDebug("Starting Initialization...")
+    pcall(loadMemory)
     notify("System", "Memory loaded successfully", CONFIG.COLORS.GREEN)
     
-    local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
-    initializePool(char)
+    local function init()
+        logDebug("Waiting for local character...")
+        local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+        logDebug("Character found, initializing pool...")
+        initializePool(char)
+        notify("System", "Pool Initialized", CONFIG.COLORS.GREEN)
+        logDebug("Pool Initialization Complete.")
+    end
+    
+    -- Ensure pool initializes even if first attempt fails
+    local success, err = pcall(init)
+    if not success then
+        logDebug("Pool Init Failed Error:", tostring(err))
+        -- Try one more time after a short delay
+        task.delay(5, function() 
+            logDebug("Retrying pool initialization...")
+            pcall(init) 
+        end)
+    end
 end)
 
 -- Save memory every 60 seconds
@@ -395,6 +464,7 @@ end)
 
 -- RNG Activation Logic (Restored and Upgraded)
 task.delay(1, function()
+    logDebug("Attempting RNG Activation...")
     if not state.rngDone then
         state.rngDone = true
         modeLabel.Text = "<i>Sorteando habilidade...</i>"
@@ -402,7 +472,10 @@ task.delay(1, function()
         
         task.wait(1.5)
         
-        local success = math.random() < CONFIG.RNG_CHANCE
+        local roll = math.random()
+        local success = roll < CONFIG.RNG_CHANCE
+        logDebug("RNG Roll:", roll, "Target:", CONFIG.RNG_CHANCE, "Success:", success)
+        
         if success then
             state.projecaoActive = true
             state.abilityStartTime = os.clock()
@@ -410,9 +483,7 @@ task.delay(1, function()
             modeLabel.TextColor3 = CONFIG.COLORS.PURPLE
             
             notify("Ability", "Projection Sorcery Activated!", CONFIG.COLORS.PURPLE)
-            
-            -- Cool "Rainbow" effect for Active status
-            task.spawn(function()
+            logDebug("Ability Activated. Start Time:", state.abilityStartTime)
                 while state.projecaoActive do
                     for i = 0, 1, 0.01 do
                         if not state.projecaoActive then break end
@@ -474,6 +545,7 @@ RunService.RenderStepped:Connect(function(dt)
             -- Efficient spatial check: Is target within clone's expanded hitbox?
             local diff = (targetHrp.Position - cloneHrp.Position)
             if math.abs(diff.X) < cloneHrp.Size.X/2 and math.abs(diff.Y) < cloneHrp.Size.Y/2 and math.abs(diff.Z) < cloneHrp.Size.Z/2 then
+                logDebug("Spatial Hit Detected! Player:", wave.targetPlayer.Name, "Clone Index:", idx)
                 wave.touchedIndexes[idx] = true
                 wave.hitCount += 1
                 
