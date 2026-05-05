@@ -18,6 +18,7 @@ local CONFIG = {
     MIRROR_LIFESPAN     = 0.8,  -- Lifespan of clones
     SUCCESS_HITS_NEEDED = 6,    -- Hits for success
     WAVE_INTERVAL       = 3.0,  -- Interval between waves
+    ABILITY_DURATION    = 5.0,  -- Max duration of the active ability
     
     COLORS = {
         GREEN     = Color3.fromRGB(80, 255, 120),
@@ -67,15 +68,16 @@ infoLabel.Text = ""
 
 -- [ STATE ]
 local state = {
-    projecaoActive = false,
-    rngDone        = false,
-    waveTimer      = 0,
-    fpsBuffer      = table.create(30, 0),
-    fpsIdx         = 0,
-    fpsSum         = 0,
-    fpsUpdateTimer = 0,
-    playerHistory  = {}, -- Store history for enhanced prediction
-    activeWaves    = {}  -- Store active waves for spatial hit detection
+    projecaoActive   = false,
+    abilityStartTime = 0,
+    rngDone          = false,
+    waveTimer        = 0,
+    fpsBuffer        = table.create(30, 0),
+    fpsIdx           = 0,
+    fpsSum           = 0,
+    fpsUpdateTimer   = 0,
+    playerHistory    = {}, -- Store history for enhanced prediction
+    activeWaves      = {}  -- Store active waves for spatial hit detection
 }
 
 -- [ UTILITIES ]
@@ -309,8 +311,58 @@ task.spawn(function()
     initializePool(char)
 end)
 
+-- RNG Activation Logic (Restored and Upgraded)
+task.delay(1, function()
+    if not state.rngDone then
+        state.rngDone = true
+        modeLabel.Text = "<i>Sorteando habilidade...</i>"
+        modeLabel.TextColor3 = CONFIG.COLORS.YELLOW
+        
+        task.wait(1.5)
+        
+        local success = math.random() < CONFIG.RNG_CHANCE
+        if success then
+            state.projecaoActive = true
+            state.abilityStartTime = os.clock()
+            modeLabel.Text = "<b>◈ ARTE DE PROJEÇÃO: ATIVA</b>"
+            modeLabel.TextColor3 = CONFIG.COLORS.PURPLE
+            
+            -- Cool "Rainbow" effect for Active status
+            task.spawn(function()
+                while state.projecaoActive do
+                    for i = 0, 1, 0.01 do
+                        if not state.projecaoActive then break end
+                        modeLabel.TextColor3 = Color3.fromHSV(i, 0.8, 1)
+                        task.wait(0.05)
+                    end
+                end
+            end)
+            
+            -- Auto-deactivate after 5 seconds
+            task.delay(CONFIG.ABILITY_DURATION, function()
+                if state.projecaoActive then
+                    state.projecaoActive = false
+                    modeLabel.Text = "<font color='#FF4646'>◈ ARTE DE PROJEÇÃO: EXPIRADA</font>"
+                    task.delay(2, function() modeLabel.Text = "A aguardar..." modeLabel.TextColor3 = CONFIG.COLORS.PURPLE end)
+                end
+            end)
+        else 
+            modeLabel.Text = "<font color='#FF4646'>✗ FALHA NA ATIVAÇÃO</font>"
+            task.delay(2, function() modeLabel.Text = "A aguardar..." end)
+        end
+    end
+end)
 
-    -- [ MAIN LOOP ]
+-- [ MAIN LOOP ]
+
+-- Helper to get ping without developer-only methods
+local function getPing()
+    -- localPlayer:GetNetworkPing() is often restricted or inaccurate in some environments.
+    -- We can use a fallback or simply keep it if the environment supports it, 
+    -- but let's use a safer check.
+    local success, ping = pcall(function() return localPlayer:GetNetworkPing() end)
+    return success and math.floor(ping * 1000) or 0
+end
 
 RunService.RenderStepped:Connect(function(dt)
     updatePlayerHistory(dt) -- Update player movement history
@@ -352,10 +404,30 @@ RunService.RenderStepped:Connect(function(dt)
                     wave.isSuccessTriggered = true
                     infoLabel.Text = "★ PREVISÃO DE SUCESSO: " .. wave.targetPlayer.Name .. " ★"
                     infoLabel.TextColor3 = CONFIG.COLORS.GREEN
+                    
+                    -- Ability ends on success
+                    if state.projecaoActive then
+                        state.projecaoActive = false
+                        modeLabel.Text = "<font color='#50FF78'>◈ ARTE DE PROJEÇÃO: CONCLUÍDA</font>"
+                        task.delay(2, function() modeLabel.Text = "A aguardar..." modeLabel.TextColor3 = CONFIG.COLORS.PURPLE end)
+                    end
                 end
             end
         end
-    end
+        
+        -- Check if every prediction failed (all clones expired or checked without success)
+        local allChecked = true
+        for idx = 1, CONFIG.PREDICTION_FRAMES do
+            if not wave.touchedIndexes[idx] then
+                allChecked = false
+                break
+            end
+        end
+        
+        -- In this logic, touchedIndexes tracks successful touches. 
+        -- If the wave expires (handled by table.remove above), it's a failure.
+        -- If we want to end early when "every prediction failed", we need to define "failed".
+        -- Let's stick to: End if 5s pass OR if success is reached.
 
     -- FPS Counter Logic
     state.fpsIdx = state.fpsIdx % 30 + 1
@@ -370,9 +442,10 @@ RunService.RenderStepped:Connect(function(dt)
         fpsLabel.Text = "FPS: " .. avgFps
         
         -- Ping Counter Logic (Updated every 0.5s with FPS)
-        local ping = math.floor(localPlayer:GetNetworkPing() * 1000)
+        local ping = getPing()
         pingLabel.Text = "Ping: " .. ping .. "ms"
-        pingLabel.TextColor3 = ping < 100 and CONFIG.COLORS.GREEN or ping < 200 and CONFIG.COLORS.YELLOW or CONFIG.COLORS.RED
+        pingLabel.TextColor3 = (ping > 0 and ping < 100) and CONFIG.COLORS.GREEN or (ping >= 100 and ping < 200) and CONFIG.COLORS.YELLOW or CONFIG.COLORS.RED
+        if ping == 0 then pingLabel.Text = "Ping: --" end
     end
 
     -- Projection Wave Logic
