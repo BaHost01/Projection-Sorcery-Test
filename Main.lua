@@ -13,7 +13,7 @@ local localPlayer = Players.LocalPlayer
 
 -- [ CONFIGURATION ]
 local CONFIG = {
-    RNG_CHANCE          = 0.40, -- 40% chance to activate
+    RNG_CHANCE          = 1, -- 40% chance to activate
     PREDICTION_FRAMES   = 24,   -- Number of clones
     MIRROR_LIFESPAN     = 0.8,  -- Lifespan of clones
     SUCCESS_HITS_NEEDED = 6,    -- Hits for success
