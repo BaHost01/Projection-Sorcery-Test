@@ -484,6 +484,9 @@ task.delay(1, function()
             
             notify("Ability", "Projection Sorcery Activated!", CONFIG.COLORS.PURPLE)
             logDebug("Ability Activated. Start Time:", state.abilityStartTime)
+            
+            -- Cool "Rainbow" effect for Active status
+            task.spawn(function()
                 while state.projecaoActive do
                     for i = 0, 1, 0.01 do
                         if not state.projecaoActive then break end
