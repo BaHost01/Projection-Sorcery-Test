@@ -165,7 +165,7 @@ local function loadMemory()
             lastPos         = Vector3.new(data.lastPos[1], data.lastPos[2], data.lastPos[3]),
             velocityHistory = velHist,
         }
-        count += 1
+        count = count + 1
     end
     state.memoryLoaded = true
     -- BUG FIX #5: was `#state.playerHistory` which always returns 0 on a dict
@@ -188,18 +188,19 @@ end
 -- [ PLAYER HISTORY / VELOCITY ]
 local function updatePlayerHistory(dt)
     for _, player in ipairs(Players:GetPlayers()) do
-        if player == localPlayer then continue end
-        local char = player.Character
-        local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            if not state.playerHistory[player.UserId] then
-                state.playerHistory[player.UserId] = {lastPos = hrp.Position, velocityHistory = {}}
+        if player ~= localPlayer then
+            local char = player.Character
+            local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                if not state.playerHistory[player.UserId] then
+                    state.playerHistory[player.UserId] = {lastPos = hrp.Position, velocityHistory = {}}
+                end
+                local hist = state.playerHistory[player.UserId]
+                local vel  = (hrp.Position - hist.lastPos) / dt
+                table.insert(hist.velocityHistory, 1, vel)
+                if #hist.velocityHistory > 10 then table.remove(hist.velocityHistory) end
+                hist.lastPos = hrp.Position
             end
-            local hist = state.playerHistory[player.UserId]
-            local vel  = (hrp.Position - hist.lastPos) / dt
-            table.insert(hist.velocityHistory, 1, vel)
-            if #hist.velocityHistory > 10 then table.remove(hist.velocityHistory) end
-            hist.lastPos = hrp.Position
         end
     end
 end
@@ -208,7 +209,7 @@ local function getSmoothedVelocity(userId)
     local hist = state.playerHistory[userId]
     if not hist or #hist.velocityHistory == 0 then return Vector3.zero end
     local sum = Vector3.zero
-    for _, v in ipairs(hist.velocityHistory) do sum += v end
+    for _, v in ipairs(hist.velocityHistory) do sum = sum + v end
     return sum / #hist.velocityHistory
 end
 
@@ -643,7 +644,7 @@ RunService.RenderStepped:Connect(function(dt)
     state.fpsIdx = state.fpsIdx % 30 + 1
     state.fpsSum = state.fpsSum - state.fpsBuffer[state.fpsIdx] + (1 / dt)
     state.fpsBuffer[state.fpsIdx] = 1 / dt
-    state.fpsUpdateTimer += dt
+    state.fpsUpdateTimer = state.fpsUpdateTimer + dt
 
     if state.fpsUpdateTimer >= 0.5 then
         state.fpsUpdateTimer = 0

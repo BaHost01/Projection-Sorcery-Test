@@ -73,16 +73,16 @@ function ProjectionLibrary.Shatter(model, duration)
 
     for _, part in ipairs(model:GetDescendants()) do
         if part:IsA("BasePart") then
-            if part.Name == "HumanoidRootPart" then continue end
-            
-            local explodeOffset = Vector3.new(math.random(-10, 10), math.random(5, 20), math.random(-10, 10))
-            local targetCFrame = part.CFrame + explodeOffset
+            if part.Name ~= "HumanoidRootPart" then
+                local explodeOffset = Vector3.new(math.random(-10, 10), math.random(5, 20), math.random(-10, 10))
+                local targetCFrame = part.CFrame + explodeOffset
 
-            TweenService:Create(part, tweenInfo, {
-                CFrame = targetCFrame,
-                Size = Vector3.new(0.1, 0.1, 0.1),
-                Transparency = 1
-            }):Play()
+                TweenService:Create(part, tweenInfo, {
+                    CFrame = targetCFrame,
+                    Size = Vector3.new(0.1, 0.1, 0.1),
+                    Transparency = 1
+                }):Play()
+            end
         end
     end
 end
